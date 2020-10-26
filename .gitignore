@@ -4,3 +4,5 @@ newrelic_agent.log
 .env
 .DS_Store
 .vscode/
+*.json
+run.py

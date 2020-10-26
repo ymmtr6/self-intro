@@ -6,6 +6,8 @@ for (const k in config) {
   process.env[k] = config[k];
 }
 
+const fs = require("fs");
+
 const { LogLevel } = require("@slack/logger");
 const logLevel = process.env.SLACK_LOG_LEVEL || LogLevel.DEBUG;
 
@@ -46,105 +48,158 @@ if (process.env.SLACK_REQUEST_LOG_ENABLED === "1") {
   });
 }
 
+let data_store = {}; // {user_id: message_text}
+
 // ---------------------------------------------------------------
 // Start coding here..
 // see https://slack.dev/bolt/
 
 // https://api.slack.com/apps/{APP_ID}/event-subscriptions
-app.event("app_mention", async ({ logger, event, say }) => {
-  logger.debug("app_mention event payload:\n\n" + JSON.stringify(event, null, 2) + "\n");
-  const result = await say({ text: `:wave: <@${event.user}> Hi there!` });
-  logger.debug("say result:\n\n" + JSON.stringify(result, null, 2) + "\n");
-  return result;
+app.shortcut("set-intro", async ({ logger, client, body, ack }) => {
+  await registerModal({ logger, client, ack, body });
 });
 
-app.shortcut("open-modal", async ({ logger, client, body, ack }) => {
-  await openModal({ logger, client, ack, body });
+app.shortcut("show-intro", async ({ logger, client, body, ack }) => {
+  if (body.user.id === body.message.user) {
+    await registerModal({ logger, client, ack, body });
+  } else {
+    await infoModal({ logger, client, ack, body });
+  }
 });
 
-app.command("/open-modal", async ({ logger, client, ack, body }) => {
-  await openModal({ logger, client, ack, body });
-});
-
-app.view("task-modal", async ({ logger, client, body, ack }) => {
-  await handleViewSubmission({ logger, client, body, ack });
-});
 
 // ---------------------------------------------------------------
 
-async function openModal({ logger, client, ack, body }) {
+async function infoModal({ logger, client, ack, body }) {
+  logger.debug("info modal: \n" + JSON.stringify(body, null, 2));
   try {
+    const user_info = data_store[body.message.user];
+    logger.debug(user_info);
+    if (!user_info) {
+      await client.views.open({
+        "trigger_id": body.trigger_id,
+        "view": {
+          "type": "modal",
+          "title": {
+            "type": "plain_text",
+            "text": `自己紹介`,
+            "emoji": true
+          },
+          "close": {
+            "type": "plain_text",
+            "text": "閉じる",
+            "emoji": true
+          },
+          "blocks": [
+            {
+              "type": "section",
+              "text": {
+                "type": "mrkdwn",
+                "text": "自己紹介メッセージが登録されていません"
+              }
+            }
+          ]
+        }
+      });
+      return;
+    }
     const res = await client.views.open({
       "trigger_id": body.trigger_id,
       // Block Kit Builder - http://j.mp/bolt-starter-modal-json
       "view": {
         "type": "modal",
-        "callback_id": "task-modal",
-        "private_metadata": JSON.stringify(body), // Remove this when pasting this in Block Kit Builder
         "title": {
           "type": "plain_text",
-          "text": "Create a task",
-          "emoji": true
-        },
-        "submit": {
-          "type": "plain_text",
-          "text": "Submit",
+          "text": user_info.user_name || "自己紹介",
           "emoji": true
         },
         "close": {
           "type": "plain_text",
-          "text": "Cancel",
+          "text": "閉じる",
           "emoji": true
         },
         "blocks": [
           {
-            "type": "input",
-            "block_id": "input-title",
-            "element": {
-              "type": "plain_text_input",
-              "action_id": "input",
-              "initial_value": body.text // Remove this when pasting this in Block Kit Builder
-            },
-            "label": {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": user_info.text
+            }
+          }
+          //C01C6FUUJ15
+        ]
+      }
+    });
+    logger.debug("views.open response:\n\n" + JSON.stringify(res, null, 2) + "\n");
+    await ack();
+  } catch (e) {
+    logger.error("views.open error:\n\n" + JSON.stringify(e, null, 2) + "\n");
+    await ack(`:x: Failed to open a modal due to *${e.code}* ...`);
+  }
+}
+
+async function registerModal({ logger, client, ack, body }) {
+  try {
+    logger.debug("registerModal:\n" + JSON.stringify(body, null, 2));
+    const user_info = data_store[body.user.id]
+    if (!user_info) {
+      user_info = { "text": "" };
+    }
+    const res = await client.views.open({
+      "trigger_id": body.trigger_id,
+      // Block Kit Builder - http://j.mp/bolt-starter-modal-json
+      "view": {
+        "type": "modal",
+        "callback_id": "register-intro",
+        "private_metadata": JSON.stringify(body),
+        "title": {
+          "type": "plain_text",
+          "text": "自己紹介を設定する",
+          "emoji": true
+        },
+        "submit": {
+          "type": "plain_text",
+          "text": "登録",
+          "emoji": true
+        },
+        "close": {
+          "type": "plain_text",
+          "text": "キャンセル",
+          "emoji": true
+        },
+        "blocks": [
+          {
+            "type": "header",
+            "text": {
               "type": "plain_text",
-              "text": "Title",
+              "text": "変更前",
               "emoji": true
-            },
-            "optional": false
+            }
           },
           {
-            "type": "input",
-            "block_id": "input-deadline",
-            "element": {
-              "type": "datepicker",
-              "action_id": "input",
-              "placeholder": {
-                "type": "plain_text",
-                "text": "Select a date",
-                "emoji": true
-              }
-            },
-            "label": {
-              "type": "plain_text",
-              "text": "Deadline",
-              "emoji": true
-            },
-            "optional": true
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": user_info.text || "*NO_DATA*"
+            }
           },
           {
-            "type": "input",
-            "block_id": "input-description",
-            "element": {
-              "type": "plain_text_input",
-              "action_id": "input",
-              "multiline": true
-            },
-            "label": {
+            "type": "divider"
+          },
+          {
+            "type": "header",
+            "text": {
               "type": "plain_text",
-              "text": "Description",
+              "text": "変更後",
               "emoji": true
-            },
-            "optional": true
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": body.message.text || "*NO_DATA*"
+            }
           }
         ]
       }
@@ -157,81 +212,45 @@ async function openModal({ logger, client, ack, body }) {
   }
 }
 
-async function handleViewSubmission({ logger, client, body, ack }) {
+app.view("register-intro", async ({ logger, client, body, ack }) => {
   logger.debug("view_submission view payload:\n\n" + JSON.stringify(body.view, null, 2) + "\n");
-
-  const stateValues = body.view.state.values;
-  const title = stateValues["input-title"]["input"].value;
-  const deadline = stateValues["input-deadline"]["input"].selected_date;
-  const description = stateValues["input-description"]["input"].value;
-
-  const errors = {};
-  if (title.length <= 5) {
-    errors["input-title"] = "Title must be longer than 5 characters";
-  }
-  if (Object.entries(errors).length > 0) {
-    await ack({
-      response_action: "errors",
-      errors: errors
-    });
-  } else {
-    // Save the input to somewhere
-    logger.info(`Valid response:\ntitle: ${title}\ndeadline: ${deadline}\ndescription: ${description}\n`);
-    // Post a message using response_url given by the slash comamnd
-    const command = JSON.parse(body.view.private_metadata);
-    const message = {
-      "text": "[fallback] Somehow Slack app failed to render blocks",
-      // Block Kit Builder - http://j.mp/bolt-starter-msg-json
-      "blocks": [
-        {
-          "type": "section",
-          "text": {
-            "type": "mrkdwn",
-            "text": "*Your new task was successfully created! :rocket:*"
-          }
-        },
-        {
-          "type": "section",
-          "fields": [
-            {
-              "type": "mrkdwn",
-              "text": `*Title:*\n${title}`
-            },
-            {
-              "type": "mrkdwn",
-              "text": `*Deadline:*\n${deadline}`
-            },
-            {
-              "type": "mrkdwn",
-              "text": `*Description:*\n${description}`
-            }
-          ]
-        }
-      ]
-    };
-    if (command && command.response_url) {
-      // Cannot use respond here as the response_url is not given here
-      message.response_type = "ephemeral"; // or "in_channel"
-      await postViaResponseUrl(
-        command.response_url, // available for 30 minutes
-        message
-      );
-    } else {
-      const res = await client.chat.postMessage({
-        channel: body.user.id,
-        text: message.text,
-        blocks: message.blocks
-      });
-      logger.debug("chat.postMessage response:\n\n" + JSON.stringify(res, null, 2) + "\n");
-    }
+  try {
     await ack();
+    message = JSON.parse(body.view.private_metadata);
+    user_info = await client.users.info({
+      user: message.message.user
+    });
+    data_store[message.message.user] = {
+      "user_id": message.message.user,
+      "user_name": user_info.user.real_name,
+      "text": message.message.text,
+      "channel_id": message.channel.id,
+      "ts": message.message.ts
+    }
+    writeConfig("data_store.json", data_store);
+  } catch (e) {
+    await ack("メッセージの登録に失敗しました\n" + JSON.stringify(e, null, 2));
+    logger.debug(JSON.stringify(e, null, 2))
   }
-}
+});
 
 // Utility to post a message using response_url
 const axios = require('axios');
 function postViaResponseUrl(responseUrl, response) {
   return axios.post(responseUrl, response);
+}
+
+// ファイルに保存する
+function existsConfig(filename) {
+  return fs.existsSync(`./config/${filename}`);
+}
+
+function readConfig(filename) {
+  return JSON.parse(fs.readFileSync(`./config/${filename}`));
+}
+
+function writeConfig(filename, json_object) {
+  fs.writeFileSync(`./config/${filename}`, JSON.stringify(json_object, null, 2));
 }
 
 receiver.app.get("/", (_req, res) => {
@@ -240,5 +259,8 @@ receiver.app.get("/", (_req, res) => {
 
 (async () => {
   await app.start(process.env.PORT || 3000);
+  if (existsConfig("data_store.json")) {
+    data_store = readConfig("data_store.json")
+  }
   console.log("⚡️ Bolt app is running!");
 })();
