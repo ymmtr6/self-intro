@@ -101,6 +101,7 @@ async function infoModal({ logger, client, ack, body }) {
           ]
         }
       });
+      await ack();
       return;
     }
     const res = await client.views.open({
